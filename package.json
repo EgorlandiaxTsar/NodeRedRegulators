@@ -1,0 +1,13 @@
+{
+    "name": "@egorgoncharov/regulators",
+    "version": "1.0.0",
+    "description": "Library that includes essential regulators. Now includes only an advanced PID regulator.",
+    "dependencies": {},
+    "keywords": ["node-red", "pid", "pid-regulator", "regulators", "regulator"],
+    "node-red": {
+        "nodes": {
+            "pid-regulator": "pid/pid-regulator.js"
+        }
+    }
+}
+

@@ -1,0 +1,317 @@
+<script type="text/javascript">
+    RED.nodes.registerType('pid-regulator', {
+        oneditprepare: function() {
+            $('#node-input-outputMinLimit').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-outputMaxLimit').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-iMinLimit').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-iMaxLimit').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-iWindowSize').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterKalmanEMea').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterKalmanEEst').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterKalmanQ').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterEMALength').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterSMALength').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-dFilterMedianSize').typedInput({ type: 'num', types: [ 'num' ] });
+            $('#node-input-direction').typedInput({
+                types: [{
+                    value: 'normal',
+                    options: [ { value: 'normal', label: 'normal' }, { value: 'inverse', label: 'inverse' } ]
+                }]
+            });
+            $('#node-input-clipOutput').typedInput({
+                types: [{
+                    value: 'false',
+                    options: [ { value: 'false', label: 'false' }, { value: 'true', label: 'true' } ]
+                }]
+            });
+            $('#node-input-pCalculationMode').typedInput({
+                types: [{
+                    value: 'error',
+                    options: [ { value: 'error', label: 'error' }, { value: 'rate', label: 'rate' } ]
+                }]
+            });
+            $('#node-input-clipI').typedInput({
+                types: [{
+                    value: 'false',
+                    options: [ { value: 'false', label: 'false' }, { value: 'true', label: 'true' } ]
+                }]
+            });
+            $('#node-input-clipIAsOutput').typedInput({
+                types: [{
+                    value: 'false',
+                    options: [ { value: 'false', label: 'false' }, { value: 'true', label: 'true' } ]
+                }]
+            });
+            $('#node-input-iCalculationMode').typedInput({
+                types: [{
+                    value: 'normal',
+                    options: [ { value: 'normal', label: 'normal' }, { value: 'window', label: 'window' } ]
+                }]
+            });
+            for (let i = 0; i < 4; i++) {
+                $(`#node-input-dFilter${ (i + 1) }`).typedInput({
+                    types: [{
+                        value: 'none',
+                        options: [
+                            { value: 'none', label: 'none' },
+                            { value: 'kalman', label: 'kalman' },
+                            { value: 'ema', label: 'ema' },
+                            { value: 'sma', label: 'sma' },
+                            { value: 'median', label: 'median' }
+                        ]
+                    }]
+                });
+            }
+            
+            function showOn(on, input, values) {
+                if (on == input) {
+                    for (let e of values) {
+                        let container = $(`#${ e.field }`);
+                        let field = $(`#node-input-${ e.field }`);
+                        field.typedInput('show')
+                        container.show();
+                    }
+                } else {
+                    for (let e of values) {
+                        let container = $(`#${ e.field }`);
+                        let field = $(`#node-input-${ e.field }`);
+                        let value = field.typedInput('value');
+                        let checkNan = e.checkNan, defval = e.defval;
+                        let newValue = value != null && value != undefined && (!checkNan || (checkNan && !isNaN(value))) ? value : defval;
+                        field.typedInput('value', newValue);
+                        field.typedInput('hide')
+                        container.hide();
+                    }
+                }
+            }
+
+            $('#node-input-sendState').typedInput({
+                types: [{
+                    value: 'false',
+                    options: [{ value: 'false', label: 'false' }, { value: 'true', label: 'true' }]
+                }]
+            });
+            for (let target of ['output', 'i']) {
+                const upperCase = (str) => { return str.replace(/^\w/, (c) => c.toUpperCase()); };
+                $(`#node-input-clip${ upperCase(target) }`).on('change', (event, type, value) => {
+                    showOn('true', value, [{ field: `${ target }MinLimit`, checkNan: true, defval: 0 }, { field: `${ target }MaxLimit`, checkNan: true, defval: 1 }]);
+                });
+            }
+            $('#node-input-iCalculationMode').on('change', (event, type, value) => {
+                showOn('window', value, [{ field: 'iWindowSize', checkNan: true, defval: 10 }]);
+            });
+            const valuesMap = {
+                dFilter1: 'none',
+                dFilter2: 'none',
+                dFilter3: 'none',
+                dFilter4: 'none'
+            };
+            for (let i = 0; i < 4; i++) {
+                const currentInput = `dFilter${ (i + 1) }`;
+                const currentInputId = `#node-input-${ currentInput }`;
+                $(currentInputId).on('change', (event, type, value) => {
+                    const prevValuesMap = {...valuesMap};
+                    for (let k = 0; k < 4; k++) valuesMap[`dFilter${ (k + 1) }`] = $(`#node-input-dFilter${ (k + 1) }`).typedInput('value');
+                    if (value != 'none' && Object.values(valuesMap).filter(e => e === value).length > 1) {
+                        let dFilterId = 0;
+                        for (let e of Object.keys(prevValuesMap)) {
+                            if (prevValuesMap[e] === value) {
+                                dFilterId = e;
+                                break;
+                            }
+                        }
+                        $(`#node-input-${ dFilterId }`).typedInput('value', prevValuesMap[currentInput]);
+                        valuesMap[dFilterId] = prevValuesMap[currentInput];
+                    }
+                    showOn('kalman', value, [
+                        { field: 'dFilterKalmanEMea', checkNan: true, defval: 1 },
+                        { field: 'dFilterKalmanEEst', checkNan: true, defval: 1 },
+                        { field: 'dFilterKalmanQ', checkNan: true, defval: 0.01 }
+                    ]);
+                    showOn('ema', value, [{ field: 'dFilterEMALength', checkNan: true, defval: 10 }]);
+                    showOn('sma', value, [{ field: 'dFilterSMALength', checkNan: true, defval: 10 }]);
+                    showOn('median', value, [{ field: 'dFilterMedianSize', checkNan: true, defval: 10 }]);
+                    let config = {
+                        'none': [],
+                        'kalman': [
+                            { field: 'dFilterKalmanEMea', checkNan: true, defval: 1 },
+                            { field: 'dFilterKalmanEEst', checkNan: true, defval: 1 },
+                            { field: 'dFilterKalmanQ', checkNan: true, defval: 0.01 }
+                        ],
+                        'ema': [{ field: 'dFilterEMALength', checkNan: true, defval: 10 }],
+                        'sma': [{ field: 'dFilterSMALength', checkNan: true, defval: 10 }],
+                        'median': [{ field: 'dFilterMedianSize', checkNan: true, defval: 10 }]
+                    };
+                    let active = [], closed = [], all = ['none', 'kalman', 'ema', 'sma', 'median'];
+                    for (let e of Object.values(valuesMap)) active.push(e);
+                    for (let e of all) {
+                        if (!active.includes(e)) closed.push(e);
+                    }
+                    for (let e of active) showOn(e, e, config[e]);
+                    for (let e of closed) showOn(e, '', config[e]);
+                });
+            }
+        },
+        category: 'regulators',
+        defaults: {
+            name: { value: '', required: false },
+            target: { value: 0, required: true, validate: RED.validators.number() },
+            kp: { value: 0, required: true, validate: RED.validators.number() },
+            ki: { value: 0, required: true, validate: RED.validators.number() },
+            kd: { value: 0, required: true, validate: RED.validators.number() },
+            t: { value: 1000, required: true, validate: RED.validators.number() },
+            direction: { value: 'normal', required: true },
+            clipOutput: { value: 'false', required: true },
+            outputMinLimit: { value: 0, required: true, validate: RED.validators.number() },
+            outputMaxLimit: { value: 1, required: true, validate: RED.validators.number() },
+            pCalculationMode: { value: 'error', required: true },
+            clipI: { value: 'false', required: true },
+            iMinLimit: { value: 0, required: true, validate: RED.validators.number() },
+            iMaxLimit: { value: 1, required: true, validate: RED.validators.number() },
+            clipIAsOutput: { value: 'true', required: true },
+            iCalculationMode: { value: 'normal', required: true },
+            iWindowSize: { value: 10, required: true, validate: RED.validators.number() },
+            dFilter1: { value: 'none', required: true },
+            dFilter2: { value: 'none', required: true },
+            dFilter3: { value: 'none', required: true },
+            dFilter4: { value: 'none', required: true },
+            dFilterKalmanEMea: { value: 1, required: true, validate: RED.validators.number() },
+            dFilterKalmanEEst: { value: 1, required: true, validate: RED.validators.number() },
+            dFilterKalmanQ: { value: 0.01, required: true, validate: RED.validators.number() },
+            dFilterEMALength: { value: 10, required: true, validate: RED.validators.number() },
+            dFilterSMALength: { value: 10, required: true, validate: RED.validators.number() },
+            dFilterMedianSize: { value: 10, required: true, validate: RED.validators.number() },
+            fallbackValue: { value: 0, required: true, validate: RED.validators.number() },
+            sendState: { value: 'false', required: true }
+        },
+        inputs: 1,
+        outputs: 3,
+        color: '#E9967A',
+        paletteLabel: 'pid regulator',
+        label: function() {
+            return this.name || 'pid regulator';
+        },
+        labelStyle: function() {
+            return this.name ? 'node_label_italic' : '';
+        },
+        icon: 'font-awesome/fa-cogs'
+    });
+</script>
+<script type="text/html" data-template-name="pid-regulator">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag" style="padding-right: 5px;"></i>Name</label>
+        <input type="text" id="node-input-name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-target"><i class="fa fa-crosshairs" style="padding-right: 5px;"></i>Target</label>
+        <input type="text" id="node-input-target">
+    </div>
+    <div class="form-row">
+        <label for="node-input-kp"><i class="fa fa-wrench" style="padding-right: 5px;"></i>P coeff (kp)</label>
+        <input type="text" id="node-input-kp">
+    </div>
+    <div class="form-row">
+        <label for="node-input-ki"><i class="fa fa-wrench" style="padding-right: 5px;"></i>I coeff (ki)</label>
+        <input type="text" id="node-input-ki">
+    </div>
+    <div class="form-row">
+        <label for="node-input-kd"><i class="fa fa-wrench" style="padding-right: 5px;"></i>D coeff (kd)</label>
+        <input type="text" id="node-input-kd">
+    </div>
+    <div class="form-row">
+        <label for="node-input-t"><i class="fa fa-clock-o" style="padding-right: 5px;"></i>T</label>
+        <input type="text" id="node-input-t">
+    </div>
+    <div class="form-row">
+        <label for="node-input-direction"><i class="fa fa-compass" style="padding-right: 5px;"></i>Direction</label>
+        <input type="text" id="node-input-direction">
+    </div>
+    <div class="form-row">
+        <label for="node-input-clipOutput"><i class="fa fa-scissors" style="padding-right: 5px;"></i>Clip output</label>
+        <input type="text" id="node-input-clipOutput">
+    </div>
+    <div class="form-row" id="outputMinLimit">
+        <label for="node-input-outputMinLimit"><i class="fa fa-cube" style="padding-right: 5px;"></i>Output min limit</label>
+        <input type="text" id="node-input-outputMinLimit">
+    </div>
+    <div class="form-row" id="outputMaxLimit">
+        <label for="node-input-outputMaxLimit"><i class="fa fa-cube" style="padding-right: 5px;"></i>Output max limit</label>
+        <input type="text" id="node-input-outputMaxLimit">
+    </div>
+    <div class="form-row">
+        <label for="node-input-pCalculationMode"><i class="fa fa-calculator" style="padding-right: 5px;"></i>P calculation mode</label>
+        <input type="text" id="node-input-pCalculationMode">
+    </div>
+    <div class="form-row">
+        <label for="node-input-clipI"><i class="fa fa-scissors" style="padding-right: 5px;"></i>Clip I</label>
+        <input type="text" id="node-input-clipI">
+    </div>
+    <div class="form-row" id="iMinLimit">
+        <label for="node-input-iMinLimit"><i class="fa fa-cube" style="padding-right: 5px;"></i>I min limit</label>
+        <input type="text" id="node-input-iMinLimit">
+    </div>
+    <div class="form-row" id="iMaxLimit">
+        <label for="node-input-iMaxLimit"><i class="fa fa-cube" style="padding-right: 5px;"></i>I max limit</label>
+        <input type="text" id="node-input-iMaxLimit">
+    </div>
+    <div class="form-row">
+        <label for="node-input-clipIAsOutput"><i class="fa fa-scissors" style="padding-right: 5px;"></i>Clip I as output</label>
+        <input type="text" id="node-input-clipIAsOutput">
+    </div>
+    <div class="form-row">
+        <label for="node-input-iCalculationMode"><i class="fa fa-calculator" style="padding-right: 5px;"></i>I calculation mode</label>
+        <input type="text" id="node-input-iCalculationMode">
+    </div>
+    <div class="form-row" id="iWindowSize">
+        <label for="node-input-iWindowSize"><i class="fa fa-cube" style="padding-right: 5px;"></i>I window size</label>
+        <input type="text" id="node-input-iWindowSize">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dFilter1"><i class="fa fa-filter" style="padding-right: 5px;"></i>D filter 1</label>
+        <input type="text" id="node-input-dFilter1">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dFilter2"><i class="fa fa-filter" style="padding-right: 5px;"></i>D filter 2</label>
+        <input type="text" id="node-input-dFilter2">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dFilter3"><i class="fa fa-filter" style="padding-right: 5px;"></i>D filter 3</label>
+        <input type="text" id="node-input-dFilter3">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dFilter4"><i class="fa fa-filter" style="padding-right: 5px;"></i>D filter 4</label>
+        <input type="text" id="node-input-dFilter4">
+    </div>
+    <div class="form-row" id="dFilterKalmanEMea">
+        <label for="node-input-dFilterKalmanEMea"><i class="fa fa-cube" style="padding-right: 5px;"></i>D Kalman filter E-Mea</label>
+        <input type="text" id="node-input-dFilterKalmanEMea">
+    </div>
+    <div class="form-row" id="dFilterKalmanEEst">
+        <label for="node-input-dFilterKalmanEEst"><i class="fa fa-cube" style="padding-right: 5px;"></i>D Kalman filter E-Est</label>
+        <input type="text" id="node-input-dFilterKalmanEEst">
+    </div>
+    <div class="form-row" id="dFilterKalmanQ">
+        <label for="node-input-dFilterKalmanQ"><i class="fa fa-cube" style="padding-right: 5px;"></i>D Kalman filter Q</label>
+        <input type="text" id="node-input-dFilterKalmanQ">
+    </div>
+    <div class="form-row" id="dFilterEMALength">
+        <label for="node-input-dFilterEMALength"><i class="fa fa-cube" style="padding-right: 5px;"></i>D EMA filter length</label>
+        <input type="text" id="node-input-dFilterEMALength">
+    </div>
+    <div class="form-row" id="dFilterSMALength">
+        <label for="node-input-dFilterSMALength"><i class="fa fa-cube" style="padding-right: 5px;"></i>D SMA filter length</label>
+        <input type="text" id="node-input-dFilterSMALength">
+    </div>
+    <div class="form-row" id="dFilterMedianSize">
+        <label for="node-input-dFilterMedianSize"><i class="fa fa-cube" style="padding-right: 5px;"></i>D median filter size</label>
+        <input type="text" id="node-input-dFilterMedianSize">
+    </div>
+    <div class="form-row">
+        <label for="node-input-fallbackValue"><i class="fa fa-exclamation-triangle" style="padding-right: 5px;"></i>Fallback value</label>
+        <input type="text" id="node-input-fallbackValue">
+    </div>
+    <div class="form-row">
+        <label for="node-input-sendState"><i class="fa fa-cogs" style="padding-right: 5px;"></i>Send state</label>
+        <input type="text" id="node-input-sendState">
+    </div>
+</script>
