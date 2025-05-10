@@ -7,7 +7,7 @@ function kalmanFilter(entry, eMea, eEst, q, lastEstimate, safeDivisionUnit = 1e-
 
 function emaFilter(entry, length, prev, step, safeDivisionUnit = 1e-10) {
     let alpha = 2 / (length + 1 + safeDivisionUnit);
-    return [step >= length ? entry * alpha + prev * (1 - alpha) : entry, entry, step];
+    return [step >= length ? entry * alpha + prev * (1 - alpha) : entry, entry, step + 1];
 }
 
 function smaFilter(entry, length, accumulated, safeDivisionUnit = 1e-10) {
@@ -55,6 +55,16 @@ function clip(value, min, max) {
     return value;
 }
 
+function smartClip(value, min, max, mode) {
+    if (mode === 'semi-strict') {
+        return value < min ? 0 : clip(value, min, max);
+    } else if (mode === 'flexible') {
+        return value <= 0 ? 0 : clip(value, min, max);
+    } else {
+        return clip(value, min, max);
+    }
+}
+
 function onErrorProportional(target, entry) {
     return target - entry;
 }
@@ -94,6 +104,7 @@ module.exports = (RED) => {
                 t: 't',
                 direction: 'direction',
                 clipOutput: 'clipOutput',
+                clipOutputMode: 'clipOutputMode',
                 outputMinLimit: 'outputMinLimit',
                 outputMaxLimit: 'outputMaxLimit',
                 pCalculationMode: 'pCalculationMode',
@@ -120,6 +131,9 @@ module.exports = (RED) => {
                 prevP: 'prevP',
                 prevI: 'prevI',
                 prevD: 'prevD',
+                prevPMult: 'prevPMult',
+                prevIMult: 'prevIMult',
+                prevDMult: 'prevDMult',
                 prevError: 'prevError',
                 prevOutput: 'prevOutput',
                 initialEntry: 'initialEntry',
@@ -171,15 +185,17 @@ module.exports = (RED) => {
             };
             const clipOutputConfig = () => {
                 const clipOutput = getValue(contextParams.clipOutput);
+                const clipOutputMode = getValue(contextParams.clipOutputMode, 'strict')
                 const outputMinLimit = getValue(contextParams.outputMinLimit, 0);
                 const outputMaxLimit = getValue(contextParams.outputMaxLimit, 0);
-                return [strToBool(clipOutput), Number(outputMinLimit), Number(outputMaxLimit)];
+                return [strToBool(clipOutput), clipOutputMode, Number(outputMinLimit), Number(outputMaxLimit)];
             };
             const clipIConfig = () => {
                 const clipI = getValue(contextParams.clipI);
                 const iMinLimit = getValue(contextParams.iMinLimit, 0);
                 const iMaxLimit = getValue(contextParams.iMaxLimit, 0);
-                return [strToBool(clipI), Number(iMinLimit), Number(iMaxLimit)];
+                const clipIAsOutput = getValue(contextParams.clipIAsOutput, 'true');
+                return [strToBool(clipI), Number(iMinLimit), Number(iMaxLimit), strToBool(clipIAsOutput)];
             };
             const filtersConfig = () => {
                 const filter1 = getValue(contextParams.dFilter1, 'none');
@@ -216,15 +232,16 @@ module.exports = (RED) => {
                 const p = getValue(contextParams.prevP, 0);
                 const i = getValue(contextParams.prevI, 0);
                 const d = getValue(contextParams.prevD, 0);
-                return [Number(p), Number(i), Number(d)];
+                const pMult = getValue(contextParams.prevPMult, 0);
+                const iMult = getValue(contextParams.prevIMult, 0);
+                const dMult = getValue(contextParams.prevDMult, 0);
+                return [Number(p), Number(i), Number(d), Number(pMult), Number(iMult), Number(dMult)];
             };
+            const now = Date.now();
             let clearCache = strToBool(getValue(contextParams.clearCache, 'false', false));
             if (clearCache) {
                 for (let e of Object.values(contextParams)) nodeContext.set(e, null);
-                msg.payload = 0;
-                send([msg, null, null]);
-                done();
-                return;
+                for (let e of nodeContext.keys()) context[e] = nodeContext.get(e);
             }
             let entry = Number(getValue('payload', 0));
             let target = Number(getValue(contextParams.target, 0));
@@ -235,13 +252,15 @@ module.exports = (RED) => {
             }
             let prevError = Number(getValue(contextParams.prevError, 0));
             let prevOutput = Number(getValue(contextParams.prevOutput, 0));
-            let force = strToBool(getValue(contextParams.force, 'false'));
+            let force = strToBool(getValue(contextParams.force, 'false', false));
             let [ kp, ki, kd ] = pidCoeffs();
-            let lastCalculation = Number(getValue(contextParams.lastCalculationTime, 0));
+            let lastCalculation = Number(getValue(contextParams.lastCalculationTime, now));
+            if (lastCalculation === now) {
+                nodeContext.set(contextParams.lastCalculationTime, lastCalculation)
+            }
             let direction = getValue(contextParams.direction, 'normal');
-            let [ clipOutput, outputMinLimit, outputMaxLimit ] = clipOutputConfig();
-            let [ clipI, iMinLimit, iMaxLimit ] = clipIConfig();
-            let clipIASOutput = strToBool(getValue(contextParams.clipIAsOutput, 'true'));
+            let [ clipOutput, clipOutputMode, outputMinLimit, outputMaxLimit ] = clipOutputConfig();
+            let [ clipI, iMinLimit, iMaxLimit, clipIASOutput ] = clipIConfig();
             let pCalculationMode = getValue(contextParams.pCalculationMode, 'error');
             let iCalcualtionMode = getValue(contextParams.iCalculationMode, 'normal');
             let iWindowSize = Number(getValue(contextParams.iWindowSize, 0));
@@ -251,15 +270,19 @@ module.exports = (RED) => {
             let [ emaFilterLength, emaFilterPrev, emaFilterStep ] = emaFilterConfig();
             let [ smaFilterLength, smaFilterAccumulated ] = smaFilterConfig();
             let [ medianFilterSize, medianFilterBuffer, medianFilterCount ] = medianFilterConfig();
-            let [ prevP, prevI, prevD ] = pidValues();
+            let [ prevP, prevI, prevD, prevPMult, prevIMult, prevDMult ] = pidValues();
             let fallbackValue = Number(getValue('fallbackValue', 0));
             let sendState = strToBool(getValue(contextParams.sendState, 'false'));
             let sendConfig = strToBool(getValue(contextParams.sendConfig, 'false', false));
 
+            // Kalman - last estimate DONE
+            // EMA    - step          DONE
+            // Median - count         ?
+
             function applyKalmanFilter(entry, eMea, eEst, q, lastEstimate, eEstCfgName, lastEstimateCfgName) {
                 const [ output, outputEEst ] = kalmanFilter(entry, eMea, eEst, q, lastEstimate, safeDivisionUnit);
                 nodeContext.set(eEstCfgName, outputEEst);
-                nodeContext.set(lastEstimateCfgName, lastEstimate);
+                nodeContext.set(lastEstimateCfgName, output);
                 for (let e of nodeContext.keys()) context[e] = nodeContext.get(e);
                 return output;
             }
@@ -289,10 +312,9 @@ module.exports = (RED) => {
 
             let output = 0;
             let dFiltersHistory = [];
-            const now = Date.now();
-            let t = Number(getValue('t', 0));
+            let t = Number(getValue(contextParams.t, 0));
             let dynamicT = t === 0;
-            t = t === 0 ? now - lastCalculation : t;
+            t = dynamicT ? now - lastCalculation : t;
             let tS = t / 1000;
             let error = 0;
             if (now - lastCalculation >= t || (force || dynamicT)) {
@@ -310,8 +332,8 @@ module.exports = (RED) => {
                         iWindow = iWindow.slice(-iWindowSize);
                         nodeContext.set(contextParams.iWindow, iWindow);
                     }
-                    i = clipI ? clip(i, iMinLimit, iMaxLimit) : i;
-                    i = clipIASOutput ? clip (i, 0, outputMaxLimit) : i;
+                    i = clipI ? clip(i, iMinLimit / ki, iMaxLimit / ki) : i;
+                    i = clipIASOutput ? clip(i, 0, outputMaxLimit / ki) : i;
                 }
                 nodeContext.set(contextParams.prevI, i);
                 let d = (error - prevError) / (tS + safeDivisionUnit);
@@ -341,13 +363,21 @@ module.exports = (RED) => {
                 }
                 nodeContext.set(contextParams.prevD, d);
                 kp = iCalcualtionMode === 'rate' ? -kp : kp;
-                if ( direction === 'inverse') {
+                if (direction === 'inverse') {
                     kp = kp > 0 ? -kp : Math.abs(kp);
                     ki = -ki;
                     kd = -kd;
                 }
-                output = (p * kp) + (i * ki) + (d * kd);
-                output = clipOutput ? clip(output, outputMinLimit, outputMaxLimit) : output;
+                p *= kp;
+                nodeContext.set(contextParams.prevPMult, p);
+                i *= ki;
+                i = clipI ? clip(i, iMinLimit, iMaxLimit) : i;
+                i = clipIASOutput ? clip(i, 0, outputMaxLimit) : i;
+                nodeContext.set(contextParams.prevIMult, i);
+                d *= kd;
+                nodeContext.set(contextParams.prevDMult, d);
+                output = p + i + d;
+                output = clipOutput ? smartClip(output, outputMinLimit, outputMaxLimit, clipOutputMode) : output;
                 nodeContext.set(contextParams.lastCalculationTime, now);
                 nodeContext.set(contextParams.prevOutput, output);
             } else {
@@ -368,6 +398,7 @@ module.exports = (RED) => {
                         t: t,
                         direction: direction,
                         clipOutput: clipOutput,
+                        clipOutputMode: clipOutputMode,
                         outputMinLimit: outputMinLimit,
                         outputMaxLimit: outputMaxLimit,
                         clipI: clipI,
@@ -414,9 +445,9 @@ module.exports = (RED) => {
                         p: prevP,
                         i: prevI,
                         d: prevD,
-                        multP: prevP * kp,
-                        multI: prevI * ki,
-                        multD: prevD * kd,
+                        multP: prevPMult,
+                        multI: prevIMult,
+                        multD: prevDMult,
                         output: output,
                         prevOutput: prevOutput,
                         error: error,
@@ -427,7 +458,7 @@ module.exports = (RED) => {
             send([msg, state, cfg]);
             done();
         });
-        this.on('close', () => { for (let e of Object.values(context)) this.context().set(e, null); });
+        // this.on('close', () => { for (let e of Object.values(context)) this.context().set(e, null); });
     }
     RED.nodes.registerType('pid-regulator', pidRegulator);
 }

@@ -24,6 +24,16 @@
                     options: [ { value: 'false', label: 'false' }, { value: 'true', label: 'true' } ]
                 }]
             });
+            $('#node-input-clipOutputMode').typedInput({
+                types: [{
+                    value: 'strict',
+                    options: [
+                        { value: 'strict', label: 'normal' }, 
+                        { value: 'semi-strict', label: 'wait min limit'},
+                        { value: 'flexible', label: 'up to min limit' }
+                    ]
+                }]
+            });
             $('#node-input-pCalculationMode').typedInput({
                 types: [{
                     value: 'error',
@@ -97,6 +107,9 @@
                     showOn('true', value, [{ field: `${ target }MinLimit`, checkNan: true, defval: 0 }, { field: `${ target }MaxLimit`, checkNan: true, defval: 1 }]);
                 });
             }
+            $('#node-input-clipOutput').on('change', (event, type, value) => {
+                showOn('true', value, [{ field: 'clipOutputMode', checkNan: false, defval: 'strict' }]);
+            });
             $('#node-input-iCalculationMode').on('change', (event, type, value) => {
                 showOn('window', value, [{ field: 'iWindowSize', checkNan: true, defval: 10 }]);
             });
@@ -162,6 +175,7 @@
             t: { value: 1000, required: true, validate: RED.validators.number() },
             direction: { value: 'normal', required: true },
             clipOutput: { value: 'false', required: true },
+            clipOutputMode: { value: 'strict', required: true },
             outputMinLimit: { value: 0, required: true, validate: RED.validators.number() },
             outputMaxLimit: { value: 1, required: true, validate: RED.validators.number() },
             pCalculationMode: { value: 'error', required: true },
@@ -229,6 +243,10 @@
     <div class="form-row">
         <label for="node-input-clipOutput"><i class="fa fa-scissors" style="padding-right: 5px;"></i>Clip output</label>
         <input type="text" id="node-input-clipOutput">
+    </div>
+    <div class="form-row" id="clipOutputMode">
+        <label for="node-input-clipOutputMode"><i class="fa fa-scissors" style="padding-right: 5px;"></i>Clip output mode</label>
+        <input type="text" id="node-input-clipOutputMode">
     </div>
     <div class="form-row" id="outputMinLimit">
         <label for="node-input-outputMinLimit"><i class="fa fa-cube" style="padding-right: 5px;"></i>Output min limit</label>
